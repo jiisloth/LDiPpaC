@@ -199,8 +199,7 @@ def add_errors(msg, errcount):
         msg[er] ^= 1
     return msg
 
-
-def decode(msg, wait):
+def decode2(msg, wait):
     loop = 0
     while True:
         loop += 1
@@ -233,6 +232,47 @@ def decode(msg, wait):
         if wait:
             if loop == 1:
                 print("(Press enter to continue decoding)")
+            input(str(loop) + ": " + intlist2str(msg))
+        if loop > 10000:  # Hardcoded max loop values
+            return False
+    return msg
+
+
+def decode(msg, wait):
+    loop = 0
+    while True:
+        loop += 1
+        c_nodes = []
+        failcount = []
+        for i in range(len(H)):
+            c_nodes.append(0)
+        for i in range(len(H[0])):
+            failcount.append(0)
+        for i in range(len(H)):
+            for j in range(len(H[i])):
+                if H[i][j]:
+                    c_nodes[i] ^= msg[j]
+        for i in range(len(H)):
+            for j in range(len(H[i])):
+                if H[i][j]:
+                    if c_nodes[i]:
+                        failcount[j] += 1
+        most_fails = 0
+        fail_index = 0
+        for i, f in enumerate(failcount):
+            if f > most_fails:
+                most_fails = f
+                fail_index = i
+        if most_fails == 0:
+            break
+        msg[fail_index] ^= 1
+        if wait:
+            if loop == 1:
+                print("(Press enter to continue decoding)")
+            print(str(loop-1) + ": " + intlist2str(failcount) + " # of failed parity checks")
+            indicator = list(" "*len(failcount))
+            indicator[fail_index] = "^"
+            print(str(loop-1) + ": " + intlist2str(indicator))
             input(str(loop) + ": " + intlist2str(msg))
         if loop > 10000:  # Hardcoded max loop values
             return False

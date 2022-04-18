@@ -1,10 +1,12 @@
 import argparse
-# import numpy
+import numpy as np
+from pyldpc import make_ldpc, encode, decode, get_message
 import random
 
 parser = argparse.ArgumentParser(description='LDPC encoder/decoder', formatter_class=argparse.RawTextHelpFormatter)
 parser.add_argument('-i', '--input', help='input msg to use. defaults to random.')
 parser.add_argument('-e', '--encode', help='Do encoding', action='store_true')
+parser.add_argument('-p', '--pyldpc', help='Do encoding with pyldpc', action='store_true')
 parser.add_argument('-d', '--decode', help='Do decoding', action='store_true')
 parser.add_argument('-f', '--errors', help='Errorcount. default: 0', type=int)
 parser.add_argument('-s', '--silent', help='Dont print', action='store_true')
@@ -17,13 +19,27 @@ H_ = [
     [0, 0, 1, 0, 0, 1, 1, 1],
     [1, 0, 0, 1, 1, 0, 1, 0]
 ]
-H = [ # Example 6.7 from "A Practical Guide to Error-Control Coding Using MATLAB" // FIXED SECOND TO LAST BIT.
+H__ = [  # Example 6.7 from "A Practical Guide to Error-Control Coding Using MATLAB" // FIXED SECOND TO LAST BIT.
     [1, 1, 0, 0, 0, 0, 0],
     [0, 1, 1, 1, 0, 0, 0],
     [0, 0, 1, 1, 0, 0, 0],
     [0, 0, 0, 1, 1, 0, 0],
     [0, 0, 0, 0, 1, 1, 0],
     [0, 0, 0, 1, 0, 0, 1]
+]
+H = [
+    [0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
+    [0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1],
+    [0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0],
+    [1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1],
+    [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1],
+    [0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0],
+    [0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1],
+    [0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0]
 ]
 
 checker_nodes = []
@@ -57,21 +73,21 @@ def main():
         # if no input is given, make random input. Probably won't work with the small H matrix...
         i_len = len(H[0])
         if args.encode:
-            i_len -= int(i_len/4)  # leave some bits "open" for encoding to do stuff.. (Not very polished..)
+            i_len -= int(i_len / 4)  # leave some bits "open" for encoding to do stuff.. (Not very polished..)
         for i in range(i_len):
             code.append(random.randint(0, 1))
 
     ercount = 0
     if args.errors is not None:
         ercount = args.errors
-    if not args.silent:
+    if not args.silent and not args.pyldpc:
         print("Input: " + intlist2str(code))
         print("Matrix: H =")
         for row in H:
             print("  " + intlist2str(row))
 
     if args.encode:
-        encode(code)
+        custom_encode(code)
         if not args.silent:
             print("Checker nodes: " + intlist2str(checker_nodes))
             print("Encodign result: " + intlist2str(v_nodes))
@@ -79,13 +95,32 @@ def main():
         v_nodes = code[:]
 
     msg = v_nodes[:]
+
+    if args.pyldpc:
+        # Generate the matrix and message with pyldpc
+        n = 15
+        d_v = 4
+        d_c = 5
+        snr = 20
+        H, G = make_ldpc(n, d_v, d_c, systematic=True, sparse=True)
+        k = G.shape[1]
+        v = np.random.randint(2, size=k)
+        y = encode(G, v, snr)
+        # hacky: y has soft values so decode it with pyldpc to get hard values...
+        d = decode(H, y, snr)
+        msg = d[:]
+        print("Message: " + intlist2str(msg))
+        print("Matrix: H =")
+        for row in H:
+            print("  " + intlist2str(row))
+
     if ercount > 0:
         msg = add_errors(msg, ercount)
         if not args.silent:
             print("Msg after added (" + str(ercount) + ") errors: " + intlist2str(msg))
     if args.decode:
-        msg = decode(msg, args.wait)
-        if not msg:
+        msg = custom_decode(msg, args.wait)
+        if type(msg) == type(False):
             if not args.silent:
                 print("Could not decode the message")
             return False
@@ -108,49 +143,12 @@ def main():
     return msg
 
 
-
-def generate_matrix(n, m, wr, wc):
-    # TODO: Redo all code. completely random won't work.
-    # http://plaza.ufl.edu/nayagam/pubs/ldpc/generate.html This might help.
-    print("Feature not ready")
-    return
-    pm = []
-    for i in range(m):
-        row = []
-        for j in range(n):
-            r_ones = 0
-            for b in row:
-                if b == 1:
-                    r_ones += 1
-            c_ones = 0
-            for b in pm:
-                if b[j] == 1:
-                    c_ones += 1
-            if wr - r_ones >= n - j or wc - c_ones >= m - i:
-                row.append(1)
-            elif wr - r_ones >= n - j or wc - c_ones >= m - i:
-                row.append(1)
-            else:
-                row.append(0)
-
-            # if r_ones < wr and c_ones < wc:
-            #    row.append(1)
-            # else:
-            #    row.append(0)
-        # if i < wc:
-        # random.shuffle(row)
-        pm.append(row)
-    # random.shuffle(pm)
-    # pm = list(map(list, zip(*pm)))  # rows are now colums
-    # random.shuffle(pm)
-    # pm = list(map(list, zip(*pm)))  # back
-    return pm
-
-def encode(code):
+def custom_encode(code):
     # This could be done by just multiplying the input msg with Generator matrix G which you get from the H with some matrix magic.
     # TODO: matrix magic for the generator matrix.
     init_nodes(code)
     set_parity_bits()
+
 
 def init_nodes(code):
     for f in H:
@@ -199,6 +197,7 @@ def add_errors(msg, errcount):
         msg[er] ^= 1
     return msg
 
+
 def decode2(msg, wait):
     loop = 0
     while True:
@@ -238,7 +237,7 @@ def decode2(msg, wait):
     return msg
 
 
-def decode(msg, wait):
+def custom_decode(msg, wait):
     loop = 0
     while True:
         loop += 1
@@ -269,10 +268,10 @@ def decode(msg, wait):
         if wait:
             if loop == 1:
                 print("(Press enter to continue decoding)")
-            print(str(loop-1) + ": " + intlist2str(failcount) + " # of failed parity checks")
-            indicator = list(" "*len(failcount))
+            print(str(loop - 1) + ": " + intlist2str(failcount) + " # of failed parity checks")
+            indicator = list(" " * len(failcount))
             indicator[fail_index] = "^"
-            print(str(loop-1) + ": " + intlist2str(indicator))
+            print(str(loop - 1) + ": " + intlist2str(indicator))
             input(str(loop) + ": " + intlist2str(msg))
         if loop > 10000:  # Hardcoded max loop values
             return False

@@ -1,4 +1,6 @@
 import argparse
+import math
+
 import numpy as np
 from pyldpc import make_ldpc, encode, decode, get_message
 import random
@@ -27,7 +29,7 @@ H__ = [  # Example 6.7 from "A Practical Guide to Error-Control Coding Using MAT
     [0, 0, 0, 0, 1, 1, 0],
     [0, 0, 0, 1, 0, 0, 1]
 ]
-H = [
+H___ = [
     [0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0],
     [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
     [0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1],
@@ -40,6 +42,14 @@ H = [
     [1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1],
     [0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0],
     [0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0]
+]
+H = [
+    [1, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1],
+    [1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+    [1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0],
+    [0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0],
+    [0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1],
+    [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1]
 ]
 
 checker_nodes = []
@@ -57,11 +67,12 @@ def main():
     args = parser.parse_args()
 
     if args.matrix:
+        pass
         # TODO. This doesn't work at all.
-        dimensions = args.matrix.split(",")
-        n = int(dimensions[0])
-        m = int(dimensions[1])
-        H = generate_matrix(n, m, n / 2, m / 2)
+        # dimensions = args.matrix.split(",")
+        # n = int(dimensions[0])
+        # m = int(dimensions[1])
+        # H = generate_matrix(n, m, n / 2, m / 2)
 
     if args.input:
         for s in args.input:
@@ -90,7 +101,7 @@ def main():
         custom_encode(code)
         if not args.silent:
             print("Checker nodes: " + intlist2str(checker_nodes))
-            print("Encodign result: " + intlist2str(v_nodes))
+            print("Encoding result: " + intlist2str(v_nodes))
     else:
         v_nodes = code[:]
 
@@ -106,6 +117,9 @@ def main():
         k = G.shape[1]
         v = np.random.randint(2, size=k)
         y = encode(G, v, snr)
+        print(y)
+        spd(y)
+        return
         # hacky: y has soft values so decode it with pyldpc to get hard values...
         d = decode(H, y, snr)
         msg = d[:]
@@ -282,5 +296,145 @@ def intlist2str(intlist):
     return "".join([str(bit) for bit in intlist])
 
 
+def spd(msg):
+    sigma = 1
+    p0 = []
+    p1 = []
+    pp0 = []
+    pp1 = []
+    for r in msg:
+        j = 1 / (1 + math.exp((2 * r) / sigma))
+        p1.append(j)
+        p0.append(1 - j)
+    for i, row in enumerate(H):
+        pp1i = []
+        pp0i = []
+        for j, c in enumerate(row):
+            pp1i.append(c * p1[j])
+            pp0i.append(c * p0[j])
+        pp0.append(pp0i)
+        pp1.append(pp1i)
+
+    for x in range(8):
+        deltapp = get_deltapp(pp1, pp0)
+        deltaQ , Q0, Q1 = get_deltaQ(deltapp)
+
+        print_floatlistlist(deltaQ)
+        print_floatlistlist(Q0)
+        print_floatlistlist(Q1)
+        pp0, p0 = get_pp(p0, Q0)
+        pp1, p1 = get_pp(p1, Q1)
+        pp0, pp1, scale_pp(pp0, pp1)
+        p0, p1, scale_p(p0, p1)
+        print("p:s")
+        print(p0)
+        print(p1)
+        print("pp0")
+        print_floatlistlist(pp0)
+        print("pp1")
+        print_floatlistlist(pp1)
+        bits = get_bits(p0, p1)
+        print(bits)
+
+
+def get_bits(p0,p1):
+    bits = []
+    for i in range(len(p0)):
+        if p0[i] > p1[i]:
+            bits.append(0)
+        else:
+            bits.append(1)
+    return bits
+
+
+def get_deltapp(pp1,pp0):
+    deltapp = []
+    for i, row in enumerate(pp1):
+        deltappi = []
+        for j, c in enumerate(row):
+            deltappi.append(pp0[i][j] - pp1[i][j])
+        deltapp.append(deltappi)
+    return deltapp
+
+
+def get_deltaQ(deltapp):
+    deltaQ = []
+    Q0 = []
+    Q1 = []
+    for i, row in enumerate(deltapp):
+        deltaQi = []
+        Q0i = []
+        Q1i = []
+        for j, c in enumerate(row):
+            product = 1
+            if c != 0:
+                for j2, c2 in enumerate(row):
+                    if j2 != j and c2 != 0:
+                        product = product * c2
+                deltaQi.append(product)
+                Q0i.append(0.5*(1+product))
+                Q1i.append(0.5*(1-product))
+            else:
+                deltaQi.append(0)
+                Q0i.append(0)
+                Q1i.append(0)
+        deltaQ.append(deltaQi)
+        Q0.append(Q0i)
+        Q1.append(Q1i)
+    return deltaQ, Q0, Q1
+
+
+def get_pp(inp,inQ):
+    pp = []
+    p = []
+    for z in inQ[0]:
+        p.append("-")
+    for i, row in enumerate(inQ):
+        ppj = []
+        for j, c in enumerate(row):
+            product = 1
+            product2 = 1
+            if c != 0:
+                for i2 in range(len(inQ)):
+                    if inQ[i2][j] != 0:
+                        product2 = product2 * inQ[i2][j]
+                        if i2 != i:
+                            product = product * inQ[i2][j]
+                p[j] = inp[j] * product2
+                ppj.append(inp[j] * product)
+            else:
+                ppj.append(0)
+        pp.append(ppj)
+    return pp, p
+
+
+def scale_pp(pp0, pp1):
+    for j in range(len(pp0)):
+        for i in range(len(pp0[j])):
+            if pp0[j][i]+pp1[j][i] != 0:
+                factor = 1/(pp0[j][i]+pp1[j][i])
+                pp0[j][i] *= factor
+                pp1[j][i] *= factor
+    return pp0, pp1
+
+
+def scale_p(p0, p1):
+    for i in range(len(p0)):
+        if p0[i]+p1[i] != 0:
+            factor = 1/(p0[i]+p1[i])
+            p0[i] *= factor
+            p1[i] *= factor
+    return p0, p1
+
+
+def print_floatlistlist(l):
+    for j in l:
+        fl = []
+        for i in j:
+            f = "%.2f" % i
+            fl.append(f)
+        print(fl)
+
 if __name__ == '__main__':
-    main()
+    spd([-0.40, 0.80, -0.20, 1.10, 1.20, -0.20, -1.30, 0.70, 0.07, 1.10, 1.30, 1.10])
+    #main()

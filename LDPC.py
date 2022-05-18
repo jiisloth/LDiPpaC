@@ -109,21 +109,47 @@ def main():
 
     if args.pyldpc:
         # Generate the matrix and message with pyldpc
-        n = 15
-        d_v = 4
-        d_c = 5
-        snr = 20
-        H, G = make_ldpc(n, d_v, d_c, systematic=True, sparse=True)
-        k = G.shape[1]
-        v = np.random.randint(2, size=k)
-        y = encode(G, v, snr)
-        print(y)
-        spd(y)
+        win = 0
+        sigmawin = 0
+        for x in range(500):
+            n = 500
+            d_v = 2
+            d_c = 5
+            snr = 5
+            seed = random.randint(0, 2**32-1)
+            H, G = make_ldpc(n, d_v, d_c, seed=seed, systematic=True, sparse=True)
+            k = G.shape[1]
+            v = np.random.randint(2, size=k)
+
+
+            y = encode(G, v, snr, seed=seed)
+            # hacky: y has soft values so decode it with pyldpc to get hard values...
+            d = decode(H, y, snr)
+            msg = d[:]
+
+            # TODO: move all code bellow to the decoding segment..
+            for sigma in [1,0.9,1.1,0.8,1.2,0.6,1.4,0.3,1.7]:
+                output = spd(y, sigma)
+
+                #print("og-viesti: " + intlist2str(v))
+                #print("slothldpc: " + intlist2str(output))
+                #print("pyldpc:    " + intlist2str(msg))
+                if intlist2str(output) == intlist2str(msg):
+                    print(f"{x}: Result ok!")
+                    if sigma != 1:
+                        print(f"Fixed by fiddling with sigma: {sigma}")
+                        sigmawin += 1
+                    else:
+                        win += 1
+                    break
+                else:
+                    errors = 0
+                    for i, b in enumerate(output):
+                        if b != msg[i]:
+                            errors += 1
+                    print(f"{x}: Error: {errors}")
+        print(f"Finished: {win} correct results out of 500. {sigmawin} were fixed by fiddling with sigma value")
         return
-        # hacky: y has soft values so decode it with pyldpc to get hard values...
-        d = decode(H, y, snr)
-        msg = d[:]
-        print("Message: " + intlist2str(msg))
         print("Matrix: H =")
         for row in H:
             print("  " + intlist2str(row))
@@ -296,8 +322,7 @@ def intlist2str(intlist):
     return "".join([str(bit) for bit in intlist])
 
 
-def spd(msg):
-    sigma = 1
+def spd(msg, sigma):
     p0 = []
     p1 = []
     pp0 = []
@@ -306,6 +331,9 @@ def spd(msg):
         j = 1 / (1 + math.exp((2 * r) / sigma))
         p1.append(j)
         p0.append(1 - j)
+
+    og_mesg = get_bits(p0, p1)
+    #print("withnoice: " + intlist2str(og_mesg))
     for i, row in enumerate(H):
         pp1i = []
         pp0i = []
@@ -314,30 +342,45 @@ def spd(msg):
             pp0i.append(c * p0[j])
         pp0.append(pp0i)
         pp1.append(pp1i)
-
-    for x in range(8):
+    oldbits = og_mesg[:]
+    oldbits2 = og_mesg[:]
+    oldbits3 = og_mesg[:]
+    max_iter = 1000
+    for x in range(max_iter):
+        # 1.
         deltapp = get_deltapp(pp1, pp0)
-        deltaQ , Q0, Q1 = get_deltaQ(deltapp)
+        deltaQ, Q0, Q1 = get_deltaQ(deltapp)
 
-        print_floatlistlist(deltaQ)
-        print_floatlistlist(Q0)
-        print_floatlistlist(Q1)
+        # print_floatlistlist(deltaQ)
+        # print_floatlistlist(Q0)
+        # print_floatlistlist(Q1)
+        # 2.
         pp0, p0 = get_pp(p0, Q0)
         pp1, p1 = get_pp(p1, Q1)
-        pp0, pp1, scale_pp(pp0, pp1)
-        p0, p1, scale_p(p0, p1)
-        print("p:s")
-        print(p0)
-        print(p1)
-        print("pp0")
-        print_floatlistlist(pp0)
-        print("pp1")
-        print_floatlistlist(pp1)
+        pp0, pp1 = scale_pp(pp0, pp1)
+        p0, p1 = scale_p(p0, p1)
+        # print_floatlistlist(pp0)
+        # print_floatlistlist(pp1)
+        # 3.
         bits = get_bits(p0, p1)
-        print(bits)
+        if oldbits == bits and oldbits2 == bits and oldbits3 == bits:
+            print("ready in: " + str(x))
+            break
+        oldbits3 = oldbits2[:]
+        oldbits2 = oldbits[:]
+        oldbits = bits[:]
+        if x == max_iter -1:
+            print("Reached max iterations")
+
+    errors = 0
+    for i, b in enumerate(bits):
+        if b != og_mesg[i]:
+            errors += 1
+    print(f"fixed {errors} errors!") #thank runtu for string formating help
+    return bits
 
 
-def get_bits(p0,p1):
+def get_bits(p0, p1):
     bits = []
     for i in range(len(p0)):
         if p0[i] > p1[i]:
@@ -347,7 +390,7 @@ def get_bits(p0,p1):
     return bits
 
 
-def get_deltapp(pp1,pp0):
+def get_deltapp(pp1, pp0):
     deltapp = []
     for i, row in enumerate(pp1):
         deltappi = []
@@ -372,8 +415,8 @@ def get_deltaQ(deltapp):
                     if j2 != j and c2 != 0:
                         product = product * c2
                 deltaQi.append(product)
-                Q0i.append(0.5*(1+product))
-                Q1i.append(0.5*(1-product))
+                Q0i.append(0.5 * (1 + product))
+                Q1i.append(0.5 * (1 - product))
             else:
                 deltaQi.append(0)
                 Q0i.append(0)
@@ -384,11 +427,11 @@ def get_deltaQ(deltapp):
     return deltaQ, Q0, Q1
 
 
-def get_pp(inp,inQ):
+def get_pp(inp, inQ):
     pp = []
     p = []
     for z in inQ[0]:
-        p.append("-")
+        p.append(0)
     for i, row in enumerate(inQ):
         ppj = []
         for j, c in enumerate(row):
@@ -411,8 +454,8 @@ def get_pp(inp,inQ):
 def scale_pp(pp0, pp1):
     for j in range(len(pp0)):
         for i in range(len(pp0[j])):
-            if pp0[j][i]+pp1[j][i] != 0:
-                factor = 1/(pp0[j][i]+pp1[j][i])
+            if pp0[j][i] + pp1[j][i] != 0:
+                factor = 1 / (pp0[j][i] + pp1[j][i])
                 pp0[j][i] *= factor
                 pp1[j][i] *= factor
     return pp0, pp1
@@ -420,8 +463,12 @@ def scale_pp(pp0, pp1):
 
 def scale_p(p0, p1):
     for i in range(len(p0)):
-        if p0[i]+p1[i] != 0:
-            factor = 1/(p0[i]+p1[i])
+        if p0[i] == "?":
+            print(p0)
+        if p1[i] == "?":
+            print(p1)
+        if p0[i] + p1[i] != 0:
+            factor = 1 / (p0[i] + p1[i])
             p0[i] *= factor
             p1[i] *= factor
     return p0, p1
@@ -435,6 +482,6 @@ def print_floatlistlist(l):
             fl.append(f)
         print(fl)
 
+
 if __name__ == '__main__':
-    spd([-0.40, 0.80, -0.20, 1.10, 1.20, -0.20, -1.30, 0.70, 0.07, 1.10, 1.30, 1.10])
-    #main()
+    main()
